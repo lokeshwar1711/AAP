@@ -1,0 +1,5 @@
+Splunk Version: 8.9
+Crowdstrike Version: 7.2
+Tenable Version: 10.1
+Nxlog Version: 5.5
+Mdatp Version: 101.2
