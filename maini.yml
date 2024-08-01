@@ -1,0 +1,237 @@
+---
+- name: Install and configure httpd
+  hosts: zeusnlapaap014.msnyuhealth.org
+  become: yes
+  gather_facts: yes
+  vars:
+    report_dir: /var/www/html/agent-reports
+    report_file: /var/www/html/agent-reports/report.yaml
+
+  tasks:
+    - name: Install httpd
+      ansible.builtin.dnf:
+        name: httpd
+        state: present
+      notify: Restart httpd
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Enable firewall http service
+      ansible.posix.firewalld:
+        service: http
+        state: enabled
+        immediate: true
+        permanent: true
+      when: "'firewalld.service' in ansible_facts.services"
+
+    - name: Disable httpd welcome page
+      ansible.builtin.file:
+        path: /etc/httpd/conf.d/welcome.conf
+        state: absent
+      notify: Restart httpd
+
+    - name: Ensure report directory exists
+      ansible.builtin.file:
+        path: '{{ report_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+  handlers:
+    - name: Restart httpd
+      ansible.builtin.service:
+        name: httpd
+        state: restarted
+        enabled: true
+
+- name: Check status and version of various agents and system information
+  hosts: all
+  become: yes
+  gather_facts: no
+  vars:
+    aggregated_output: ""
+    report_dir: /var/www/html/agent-reports
+    report_file: /var/www/html/agent-reports/report.yaml
+
+  tasks:
+    - name: Check Splunk status
+      shell: sudo /opt/splunkforwarder/bin/splunk status | grep -E 'splunkd|splunk helpers'
+      register: splunk_status
+      ignore_errors: yes
+
+    - name: Check Splunk version
+      shell: /opt/splunkforwarder/bin/splunk --version | grep -E 'Splunk Universal Forwarder'
+      register: splunk_version
+      ignore_errors: yes
+
+    - name: Check Crowdstrike status
+      ansible.builtin.shell: systemctl is-active falcon-sensor
+      register: crowdstrike_status
+      ignore_errors: yes
+
+    - name: Check Crowdstrike version
+      command: /opt/CrowdStrike/falconctl -g --version
+      register: crowdstrike_version
+      ignore_errors: yes
+
+    - name: Check Tenable status
+      ansible.builtin.shell: systemctl is-active nessusagent
+      register: tenable_status
+      ignore_errors: yes
+
+    - name: Check Tenable version
+      shell: /opt/nessus_agent/sbin/nessuscli -v | grep -E "nessuscli"
+      register: tenable_version
+      ignore_errors: yes
+
+    - name: Check Nxlog status
+      ansible.builtin.shell: systemctl is-active nxlog
+      register: nxlog_status
+      ignore_errors: yes
+
+    - name: Check Nxlog version
+      shell: /opt/nxlog/bin/nxlog -V | grep -E "version"
+      register: nxlog_version
+      ignore_errors: yes
+
+    - name: Check Mdatp status
+      ansible.builtin.shell: systemctl is-active mdatp
+      register: mdatp_status
+      ignore_errors: yes
+
+    - name: Check Mdatp version
+      command: /opt/microsoft/mdatp/sbin/wdavdaemonclient version
+      register: mdatp_version
+      ignore_errors: yes
+
+    - name: Check Pacemaker service status
+      ansible.builtin.shell: systemctl is-active pcsd
+      register: pacemaker_status
+      ignore_errors: yes
+
+    - name: Check Pacemaker version
+      shell: pcs --version
+      register: pacemaker_version
+      ignore_errors: yes
+
+    - name: Check Crontab service status
+      ansible.builtin.shell: systemctl is-active crond
+      register: crontab_status
+      ignore_errors: yes
+
+    - name: Check Kdump service status
+      ansible.builtin.shell: systemctl is-active kdump
+      register: kdump_status
+      ignore_errors: yes
+
+    - name: Validate fstab integrity
+      ansible.builtin.command: ls -l /etc/fstab
+      register: fstab_integrity
+      ignore_errors: yes
+
+    - name: Get the firmware version
+      shell: dmidecode -t 5 | tail -2
+      register: firmware_version
+      ignore_errors: yes
+
+    - name: Get the OS Kernel version
+      shell: uname -r
+      register: kernel_version
+      ignore_errors: yes
+
+    - name: Get the Red Hat OS release
+      shell: cat /etc/redhat-release
+      register: os_release
+      ignore_errors: yes
+
+    - name: Get the hardware information (CPU count)
+      shell: cat /proc/cpuinfo | grep -i processor | wc -l
+      register: cpu_count
+      ignore_errors: yes
+
+    - name: Get the hardware information (RAM)
+      shell: cat /proc/meminfo | head -1
+      register: ram_info
+      ignore_errors: yes
+      
+    - name: Create output content
+      set_fact:
+        agent_data: |
+          {{ inventory_hostname }}:
+            Splunk Status: '{{ splunk_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Splunk Version: '{{ splunk_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Crowdstrike Status: '{{ crowdstrike_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Crowdstrike Version: '{{ crowdstrike_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Tenable Status: '{{ tenable_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Tenable Version: '{{ tenable_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Nxlog Status: '{{ nxlog_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Nxlog Version: '{{ nxlog_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Mdatp Status: '{{ mdatp_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Mdatp Version: '{{ mdatp_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Pacemaker Status: '{{ pacemaker_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Pacemaker Version: '{{ pacemaker_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Crontab Status: '{{ crontab_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Kdump Status: '{{ kdump_status.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Fstab Integrity: '{{ fstab_integrity.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Firmware Version: '{{ firmware_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            OS Kernel Version: '{{ kernel_version.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            Red Hat OS Release: '{{ os_release.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            CPU Count: '{{ cpu_count.stdout | default("N/A") | regex_replace("\n", " ") }}'
+            RAM Info: '{{ ram_info.stdout | default("N/A") | regex_replace("\n", " ") }}'
+
+    - name: Create report file on zeusnlapaap014.msnyuhealth.org
+      run_once: true
+      delegate_to: zeusnlapaap014.msnyuhealth.org
+      ansible.builtin.copy:
+        content: |
+          {% for _host in ansible_play_hosts %}
+          {{ hostvars[_host]['agent_data'] }}
+          {% endfor %}
+        dest: "{{ report_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure httpd is running on zeusnlapaap014.msnyuhealth.org
+      run_once: true
+      delegate_to: zeusnlapaap014.msnyuhealth.org
+      ansible.builtin.service:
+        name: httpd
+        state: started
+        enabled: true
+
+- name: Copy file to zeusnlapaap014.msnyuhealth.org
+  hosts: zeusnlapaap014.msnyuhealth.org
+  become: yes
+  tasks:
+    - name: Copy report file
+      ansible.builtin.copy:
+        src: generate_report.py
+        dest: /var/www/html/agent-reports/generate_report.py
+        owner: root
+        group: root
+        mode: '0644'
+        
+    - name: Copy Agents version file
+      ansible.builtin.copy:
+        src: agentVersions.txt
+        dest: /var/www/html/agent-reports/agentVersions.txt
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Run Python script
+  hosts: zeusnlapaap014.msnyuhealth.org
+  become: yes
+  tasks:
+    - name: Execute Python script
+      ansible.builtin.command: python3 /var/www/html/agent-reports/generate_report.py
+    
+    - name: Set permissions for report.html
+      ansible.builtin.file:
+        path: /var/www/html/agent-reports/report.html
+        owner: root
+        group: root
+        mode: '0644'
